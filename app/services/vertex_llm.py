@@ -62,43 +62,46 @@ class VertexLLM:
         if not self.available:
             return None
 
-        assert self._vertexai is not None
-        assert self._GenerativeModel is not None
+        try:
+            assert self._vertexai is not None
+            assert self._GenerativeModel is not None
 
-        self._vertexai.init(project=self._config.project, location=self._config.location)
-        model = self._GenerativeModel(self._config.model)
+            self._vertexai.init(project=self._config.project, location=self._config.location)
+            model = self._GenerativeModel(self._config.model)
 
-        prompt = {
-            "task": "Select the safest route for an urban commuter based on hazards.",
-            "constraints": [
-                "Prefer safety over speed.",
-                "Return exactly ONE sentence in alert.",
-                "Return strict JSON only.",
-            ],
-            "input": {
-                "start": start,
-                "destination": destination,
-                "hazards": hazards,
-                "routes": routes,
-            },
-            "output_schema": {
-                "chosen_route_id": "string",
-                "alert": "string (one sentence)",
-                "explanation": "string (short)",
-            },
-        }
+            prompt = {
+                "task": "Select the safest route for an urban commuter based on hazards.",
+                "constraints": [
+                    "Prefer safety over speed.",
+                    "Return exactly ONE sentence in alert.",
+                    "Return strict JSON only.",
+                ],
+                "input": {
+                    "start": start,
+                    "destination": destination,
+                    "hazards": hazards,
+                    "routes": routes,
+                },
+                "output_schema": {
+                    "chosen_route_id": "string",
+                    "alert": "string (one sentence)",
+                    "explanation": "string (short)",
+                },
+            }
 
-        response = model.generate_content(
-            json.dumps(prompt),
-            generation_config={"temperature": 0.2, "max_output_tokens": 256},
-        )
+            response = model.generate_content(
+                json.dumps(prompt),
+                generation_config={"temperature": 0.2, "max_output_tokens": 256},
+            )
 
-        text = getattr(response, "text", None) or str(response)
-        parsed = _extract_json(text)
-        if not parsed:
+            text = getattr(response, "text", None) or str(response)
+            parsed = _extract_json(text)
+            if not parsed:
+                return None
+
+            if "chosen_route_id" not in parsed or "alert" not in parsed:
+                return None
+
+            return parsed
+        except Exception:
             return None
-
-        if "chosen_route_id" not in parsed or "alert" not in parsed:
-            return None
-
-        return parsed
