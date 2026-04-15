@@ -26,6 +26,16 @@ uvicorn app.main:app --reload
 
 If you set `VERTEX_PROJECT` + `VERTEX_LOCATION` (and optionally `VERTEX_MODEL`) in a `.env`, the backend will attempt to use Vertex AI.
 
+Vertex AI authentication is done via **Google Cloud credentials** (Application Default Credentials / service accounts), not by pasting API keys into the app.
+
+Fastest local setup:
+
+```bash
+gcloud auth application-default login
+```
+
+Or set `GOOGLE_APPLICATION_CREDENTIALS` in your `.env` to a service account JSON file.
+
 If Vertex isn’t configured, the demo still works using a deterministic local evaluator.
 
 ## API
