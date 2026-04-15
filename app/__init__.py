@@ -1,0 +1,1 @@
+"""SafePath AI FastAPI app."""

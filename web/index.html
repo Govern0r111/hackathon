@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SafePath AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="min-h-screen bg-slate-50 text-slate-900">
+    <main class="mx-auto max-w-3xl p-6">
+      <header class="mb-6">
+        <h1 class="text-2xl font-semibold">SafePath AI</h1>
+        <p class="mt-1 text-sm text-slate-600">
+          Enter a start + destination to get a safest-route recommendation and a 1‑sentence alert.
+        </p>
+      </header>
+
+      <section class="rounded-xl border bg-white p-4 shadow-sm">
+        <form id="routeForm" class="grid gap-3">
+          <label class="grid gap-1">
+            <span class="text-sm font-medium">Start</span>
+            <input
+              id="start"
+              class="rounded-lg border px-3 py-2"
+              placeholder="e.g., Union Square"
+              value="Union Square"
+              required
+            />
+          </label>
+
+          <label class="grid gap-1">
+            <span class="text-sm font-medium">Destination</span>
+            <input
+              id="destination"
+              class="rounded-lg border px-3 py-2"
+              placeholder="e.g., Times Square"
+              value="Times Square"
+              required
+            />
+          </label>
+
+          <label class="flex items-center gap-2 text-sm">
+            <input id="preferTransit" type="checkbox" class="h-4 w-4" />
+            Prefer transit option
+          </label>
+
+          <div class="flex items-center gap-3">
+            <button
+              id="submitBtn"
+              type="submit"
+              class="rounded-lg bg-slate-900 px-4 py-2 text-white hover:bg-slate-800"
+            >
+              Get safest route
+            </button>
+            <span id="status" class="text-sm text-slate-600"></span>
+          </div>
+        </form>
+      </section>
+
+      <section id="result" class="mt-6 hidden grid gap-4">
+        <div class="rounded-xl border bg-white p-4 shadow-sm">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold">Actionable alert</h2>
+            <span id="llmBadge" class="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700"></span>
+          </div>
+          <p id="alert" class="mt-2 text-slate-900"></p>
+          <p id="explanation" class="mt-2 text-sm text-slate-600"></p>
+        </div>
+
+        <div class="rounded-xl border bg-white p-4 shadow-sm">
+          <h2 class="text-lg font-semibold">Safest route</h2>
+          <div id="routeSummary" class="mt-2 text-sm text-slate-700"></div>
+          <ol id="routeSteps" class="mt-3 list-decimal space-y-1 pl-5 text-sm"></ol>
+        </div>
+
+        <div class="rounded-xl border bg-white p-4 shadow-sm">
+          <h2 class="text-lg font-semibold">Live hazards (simulated)</h2>
+          <ul id="hazards" class="mt-2 space-y-2"></ul>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const form = document.getElementById('routeForm');
+      const statusEl = document.getElementById('status');
+      const submitBtn = document.getElementById('submitBtn');
+
+      const resultEl = document.getElementById('result');
+      const alertEl = document.getElementById('alert');
+      const explanationEl = document.getElementById('explanation');
+      const llmBadgeEl = document.getElementById('llmBadge');
+      const routeSummaryEl = document.getElementById('routeSummary');
+      const routeStepsEl = document.getElementById('routeSteps');
+      const hazardsEl = document.getElementById('hazards');
+
+      function setLoading(isLoading) {
+        submitBtn.disabled = isLoading;
+        submitBtn.classList.toggle('opacity-60', isLoading);
+        statusEl.textContent = isLoading ? 'Analyzing hazards…' : '';
+      }
+
+      function badge(llmUsed) {
+        return llmUsed ? 'LLM: Vertex AI' : 'LLM: local fallback';
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.innerText = text;
+        return div.innerHTML;
+      }
+
+      function render(data) {
+        resultEl.classList.remove('hidden');
+
+        alertEl.textContent = data.decision.alert;
+        explanationEl.textContent = data.decision.explanation || '';
+        llmBadgeEl.textContent = badge(data.decision.llm_used);
+
+        const r = data.safest_route;
+        routeSummaryEl.innerHTML = `
+          <div class="flex flex-wrap gap-2">
+            <span class="rounded-full bg-slate-100 px-3 py-1">${escapeHtml(r.name)}</span>
+            <span class="rounded-full bg-slate-100 px-3 py-1">ETA: ${r.eta_minutes} min</span>
+            <span class="rounded-full bg-slate-100 px-3 py-1">Risk: ${r.risk_score}</span>
+          </div>
+        `;
+        routeStepsEl.innerHTML = '';
+        r.steps.forEach((s) => {
+          const li = document.createElement('li');
+          li.textContent = `${s.instruction} (${s.approx_minutes} min)`;
+          routeStepsEl.appendChild(li);
+        });
+
+        hazardsEl.innerHTML = '';
+        data.hazards
+          .sort((a, b) => b.severity - a.severity)
+          .forEach((h) => {
+            const li = document.createElement('li');
+            li.className = 'rounded-lg border p-3';
+            li.innerHTML = `
+              <div class="flex items-center justify-between">
+                <div class="font-medium">${escapeHtml(h.title)}</div>
+                <div class="text-xs text-slate-600">Severity ${h.severity}/5</div>
+              </div>
+              <div class="mt-1 text-sm text-slate-700">${escapeHtml(h.description)}</div>
+              <div class="mt-2 text-xs text-slate-500">${escapeHtml(h.type)} • updated ${new Date(h.last_updated).toLocaleTimeString()}</div>
+            `;
+            hazardsEl.appendChild(li);
+          });
+      }
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+          const payload = {
+            start: document.getElementById('start').value,
+            destination: document.getElementById('destination').value,
+            prefer_transit: document.getElementById('preferTransit').checked,
+          };
+          const res = await fetch('/api/v1/safepath/route', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || 'Request failed');
+          }
+          const data = await res.json();
+          render(data);
+        } catch (err) {
+          alert('Error: ' + (err?.message || err));
+        } finally {
+          setLoading(false);
+        }
+      });
+    </script>
+  </body>
+</html>
