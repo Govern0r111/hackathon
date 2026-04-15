@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { GoogleMap, MarkerF, PolylineF, useJsApiLoader } from '@react-google-maps/api';
 
 /**
@@ -24,30 +24,26 @@ const GOOGLE_MAPS_API_KEY =
 // Bangalore, India (center)
 const BANGALORE_CENTER = { lat: 12.9716, lng: 77.5946 };
 
-// Placeholder points so the demo looks good immediately.
-const START_POINT = { lat: 12.9752, lng: 77.6033 };
-const END_POINT = { lat: 12.9612, lng: 77.5850 };
+// Fallback points in case live Directions fails.
+const FALLBACK_START_POINT = { lat: 12.9752, lng: 77.6033 };
+const FALLBACK_END_POINT = { lat: 12.9704, lng: 77.5946 };
+const FALLBACK_HAZARD_POINT = { lat: 12.9721, lng: 77.5982 };
 
-// Hazard location (on/near the standard route).
-const HAZARD_POINT = { lat: 12.9686, lng: 77.5955 };
-
-// Standard route path: simple polyline between start and end with a couple of bends.
-const STANDARD_ROUTE_PATH = [
-  START_POINT,
+const FALLBACK_STANDARD_ROUTE_PATH = [
+  FALLBACK_START_POINT,
   { lat: 12.9729, lng: 77.6000 },
   { lat: 12.9700, lng: 77.5966 },
-  { lat: 12.9678, lng: 77.5925 },
-  END_POINT,
+  { lat: 12.9704, lng: 77.5946 },
+  FALLBACK_END_POINT,
 ];
 
-// Detour route path: bypasses the hazard with a safer arc.
-const DETOUR_ROUTE_PATH = [
-  START_POINT,
+const FALLBACK_DETOUR_ROUTE_PATH = [
+  FALLBACK_START_POINT,
   { lat: 12.9782, lng: 77.5960 },
   { lat: 12.9760, lng: 77.5905 },
   { lat: 12.9698, lng: 77.5872 },
-  { lat: 12.9652, lng: 77.5856 },
-  END_POINT,
+  { lat: 12.9704, lng: 77.5946 },
+  FALLBACK_END_POINT,
 ];
 
 // A "Night" / dark map style (futuristic, high-contrast).
@@ -142,12 +138,19 @@ function buildHazardIcon() {
 }
 
 export default function SafePathDashboard() {
-  const [startText, setStartText] = useState('MG Road Metro');
-  const [destinationText, setDestinationText] = useState('Cubbon Park');
+  const [startText, setStartText] = useState('MG Road Metro Station, Bengaluru');
+  const [destinationText, setDestinationText] = useState('Cubbon Park, Bengaluru');
 
   // routeState: 'standard' | 'detour'
   const [routeState, setRouteState] = useState('standard');
   const [terminalText, setTerminalText] = useState('SYSTEM: Standing by. Route is clear.');
+  const [isRouting, setIsRouting] = useState(false);
+
+  const [startPoint, setStartPoint] = useState(FALLBACK_START_POINT);
+  const [endPoint, setEndPoint] = useState(FALLBACK_END_POINT);
+  const [hazardPoint, setHazardPoint] = useState(FALLBACK_HAZARD_POINT);
+  const [standardPath, setStandardPath] = useState(FALLBACK_STANDARD_ROUTE_PATH);
+  const [detourPath, setDetourPath] = useState(FALLBACK_DETOUR_ROUTE_PATH);
 
   const hazardTriggered = routeState === 'detour';
 
@@ -199,11 +202,146 @@ export default function SafePathDashboard() {
     [],
   );
 
-  const onTriggerHazard = () => {
-    if (hazardTriggered) return;
+  const getDirectionsService = useCallback(() => {
+    if (typeof window === 'undefined' || !window.google || !window.google.maps) {
+      return null;
+    }
+    return new window.google.maps.DirectionsService();
+  }, []);
 
+  const latLngToLiteral = (latLng) => ({ lat: latLng.lat(), lng: latLng.lng() });
+
+  const pickHazardPoint = (path) => {
+    if (!path || path.length < 3) return FALLBACK_HAZARD_POINT;
+    const idx = Math.min(path.length - 2, Math.max(1, Math.floor(path.length * 0.55)));
+    return path[idx];
+  };
+
+  const routeToPath = (route) => {
+    if (!route || !route.overview_path || route.overview_path.length === 0) return [];
+    return route.overview_path.map(latLngToLiteral);
+  };
+
+  const requestRoute = useCallback(
+    (request) => new Promise((resolve, reject) => {
+      const service = getDirectionsService();
+      if (!service) {
+        reject(new Error('Maps service not available'));
+        return;
+      }
+      service.route(request, (result, status) => {
+        if (status === 'OK' && result && result.routes && result.routes.length > 0) {
+          resolve(result.routes[0]);
+          return;
+        }
+        reject(new Error(`Directions failed: ${status}`));
+      });
+    }),
+    [getDirectionsService],
+  );
+
+  const buildBaseDirectionsRequest = useCallback(() => {
+    if (typeof window === 'undefined' || !window.google || !window.google.maps) return null;
+    return {
+      origin: startText,
+      destination: destinationText,
+      travelMode: window.google.maps.TravelMode.WALKING,
+      region: 'IN',
+      provideRouteAlternatives: false,
+    };
+  }, [startText, destinationText]);
+
+  const computeStandardRoute = useCallback(async () => {
+    const baseRequest = buildBaseDirectionsRequest();
+    if (!baseRequest) return;
+
+    setIsRouting(true);
+    try {
+      const route = await requestRoute(baseRequest);
+      const path = routeToPath(route);
+      if (path.length > 1) {
+        setStandardPath(path);
+        setHazardPoint(pickHazardPoint(path));
+      }
+
+      const leg = route.legs && route.legs[0];
+      if (leg) {
+        setStartPoint(latLngToLiteral(leg.start_location));
+        setEndPoint(latLngToLiteral(leg.end_location));
+      }
+
+      if (!hazardTriggered) {
+        setTerminalText('SYSTEM: Route updated. Current path is clear.');
+      }
+    } catch {
+      // Keep fallbacks so demo always works.
+      setStandardPath(FALLBACK_STANDARD_ROUTE_PATH);
+      setHazardPoint(FALLBACK_HAZARD_POINT);
+      setStartPoint(FALLBACK_START_POINT);
+      setEndPoint(FALLBACK_END_POINT);
+      if (!hazardTriggered) {
+        setTerminalText('SYSTEM: Using fallback route. Check Directions API access.');
+      }
+    } finally {
+      setIsRouting(false);
+    }
+  }, [buildBaseDirectionsRequest, hazardTriggered, requestRoute]);
+
+  const computeDetourRoute = useCallback(async () => {
+    const baseRequest = buildBaseDirectionsRequest();
+    if (!baseRequest) return;
+
+    const offsetWaypoint = {
+      lat: hazardPoint.lat + 0.006,
+      lng: hazardPoint.lng - 0.008,
+    };
+
+    setIsRouting(true);
+    try {
+      const route = await requestRoute({
+        ...baseRequest,
+        waypoints: [{ location: offsetWaypoint, stopover: false }],
+      });
+
+      const path = routeToPath(route);
+      if (path.length > 1) {
+        setDetourPath(path);
+      } else {
+        setDetourPath(FALLBACK_DETOUR_ROUTE_PATH);
+      }
+    } catch {
+      setDetourPath(FALLBACK_DETOUR_ROUTE_PATH);
+    } finally {
+      setIsRouting(false);
+    }
+  }, [buildBaseDirectionsRequest, hazardPoint, requestRoute]);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    computeStandardRoute();
+  }, [isLoaded, computeStandardRoute]);
+
+  useEffect(() => {
+    if (!isLoaded || hazardTriggered) return;
+    if (!startText.trim() || !destinationText.trim()) return;
+
+    const handle = setTimeout(() => {
+      computeStandardRoute();
+    }, 700);
+
+    return () => clearTimeout(handle);
+  }, [isLoaded, startText, destinationText, hazardTriggered, computeStandardRoute]);
+
+  const onTriggerHazard = async () => {
+    if (hazardTriggered) return;
+    await computeDetourRoute();
     setRouteState('detour');
     setTerminalText('ALERT: Unsafe condition detected ahead. Rerouting to safe detour...');
+  };
+
+  const onResetRoute = () => {
+    setRouteState('standard');
+    setTerminalText('SYSTEM: Route reset to standard path.');
   };
 
   if (!GOOGLE_MAPS_API_KEY) {
@@ -240,7 +378,7 @@ export default function SafePathDashboard() {
     <div className="min-h-screen w-full bg-slate-950 text-slate-100">
       <div className="flex h-screen w-full">
         {/* Sidebar */}
-        <aside className="w-full max-w-md border-r border-slate-800 bg-slate-900/40 p-5 flex flex-col gap-5">
+        <aside className="w-full max-w-md border-r border-slate-800 bg-slate-900/40 p-5 flex flex-col gap-5" aria-label="Route control panel">
           <div>
             <div className="text-xs tracking-widest text-slate-400">SAFEPATH AI</div>
             <h1 className="text-2xl font-semibold">Commuter Safety Dashboard</h1>
@@ -250,27 +388,38 @@ export default function SafePathDashboard() {
           </div>
 
           {/* Controls */}
-          <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
-            <label className="block text-xs text-slate-400">Start Location</label>
+          <form className="rounded-xl border border-slate-800 bg-slate-950/30 p-4" aria-label="Routing controls" onSubmit={(e) => e.preventDefault()}>
+            <label htmlFor="start-location" className="block text-xs text-slate-400">Start Location</label>
             <input
+              id="start-location"
+              name="startLocation"
               value={startText}
               onChange={(e) => setStartText(e.target.value)}
               placeholder="Enter start"
               className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm outline-none focus:border-slate-600"
+              aria-describedby="routing-hint"
             />
 
-            <label className="mt-4 block text-xs text-slate-400">Destination</label>
+            <label htmlFor="destination" className="mt-4 block text-xs text-slate-400">Destination</label>
             <input
+              id="destination"
+              name="destination"
               value={destinationText}
               onChange={(e) => setDestinationText(e.target.value)}
               placeholder="Enter destination"
               className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm outline-none focus:border-slate-600"
+              aria-describedby="routing-hint"
             />
+
+            <p id="routing-hint" className="mt-2 text-xs text-slate-400">
+              Route auto-refreshes as you type. Use the hazard button to simulate an unsafe segment.
+            </p>
 
             <button
               type="button"
               onClick={onTriggerHazard}
               disabled={hazardTriggered}
+              aria-pressed={hazardTriggered}
               className={
                 'mt-4 w-full rounded-lg px-4 py-3 text-sm font-semibold transition ' +
                 (hazardTriggered
@@ -280,10 +429,25 @@ export default function SafePathDashboard() {
             >
               Trigger Hazard Alert
             </button>
-          </div>
+
+            <button
+              type="button"
+              onClick={onResetRoute}
+              disabled={!hazardTriggered}
+              aria-pressed={!hazardTriggered}
+              className={
+                'mt-2 w-full rounded-lg px-4 py-2 text-sm font-medium transition ' +
+                (!hazardTriggered
+                  ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
+                  : 'bg-slate-700 hover:bg-slate-600 text-slate-100')
+              }
+            >
+              Reset To Standard Route
+            </button>
+          </form>
 
           {/* AI Terminal */}
-          <div className="rounded-xl border border-slate-800 bg-black/40 p-4 flex-1">
+          <section className="rounded-xl border border-slate-800 bg-black/40 p-4 flex-1" aria-label="AI terminal status">
             <div className="flex items-center justify-between">
               <div className="text-xs tracking-widest text-emerald-300">AI TERMINAL</div>
               <div className={
@@ -295,10 +459,11 @@ export default function SafePathDashboard() {
                 {hazardTriggered ? 'ALERT' : 'ONLINE'}
               </div>
             </div>
-            <div className="mt-3 font-mono text-sm leading-relaxed text-slate-100 whitespace-pre-wrap">
+            <div className="mt-3 font-mono text-sm leading-relaxed text-slate-100 whitespace-pre-wrap" role="status" aria-live="polite" aria-atomic="true">
               {terminalText}
+              {isRouting ? '\n\nSYSTEM: Computing route...' : ''}
             </div>
-          </div>
+          </section>
         </aside>
 
         {/* Map */}
@@ -315,22 +480,22 @@ export default function SafePathDashboard() {
               options={mapOptions}
             >
               {/* Start / End markers */}
-              <MarkerF position={START_POINT} label="A" />
-              <MarkerF position={END_POINT} label="B" />
+              <MarkerF position={startPoint} label="A" />
+              <MarkerF position={endPoint} label="B" />
 
               {/* Standard route */}
               {!hazardTriggered && (
-                <PolylineF path={STANDARD_ROUTE_PATH} options={standardPolylineOptions} />
+                <PolylineF path={standardPath} options={standardPolylineOptions} />
               )}
 
               {/* Hazard + detour route */}
               {hazardTriggered && (
                 <>
-                  <MarkerF position={HAZARD_POINT} icon={buildHazardIcon()} />
+                  <MarkerF position={hazardPoint} icon={buildHazardIcon()} />
 
                   {/* Glowing detour */}
-                  <PolylineF path={DETOUR_ROUTE_PATH} options={detourGlowOptions} />
-                  <PolylineF path={DETOUR_ROUTE_PATH} options={detourCoreOptions} />
+                  <PolylineF path={detourPath} options={detourGlowOptions} />
+                  <PolylineF path={detourPath} options={detourCoreOptions} />
                 </>
               )}
             </GoogleMap>
