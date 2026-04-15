@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.routes import router as api_router
@@ -20,14 +20,11 @@ def create_app() -> FastAPI:
     def healthz() -> dict:
         return {"status": "ok"}
 
-    @app.get("/")
-    def index() -> FileResponse | JSONResponse:
+    @app.get("/", include_in_schema=False, response_model=None)
+    def index():
         index_file = WEB_DIR / "index.html"
         if not index_file.exists():
-            return JSONResponse(
-                status_code=500,
-                content={"error": "Missing web/index.html"},
-            )
+            raise HTTPException(status_code=500, detail="Missing web/index.html")
         return FileResponse(index_file)
 
     return app

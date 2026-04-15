@@ -14,7 +14,7 @@ def _local_alert(decision_route_name: str, hazards_count: int) -> str:
         return f"All clear right now—take {decision_route_name} and keep an eye on crossings."
     if hazards_count <= 3:
         return f"Take {decision_route_name}; avoid the flagged intersections and expect minor slowdowns."
-    return f"Take {decision_route_name}; avoid the highest‑risk intersection cluster and allow a few extra minutes."
+    return f"Take {decision_route_name}; avoid the highest-risk intersection cluster and allow a few extra minutes."
 
 
 def generate_route_response(payload: RouteRequest, settings: Settings) -> RouteResponse:
@@ -44,8 +44,8 @@ def generate_route_response(payload: RouteRequest, settings: Settings) -> RouteR
         vertex_model = settings.vertex_model or "gemini-1.5-flash-002"
         llm = VertexLLM(VertexConfig(project=settings.vertex_project, location=settings.vertex_location, model=vertex_model))
         if llm.available:
-            hazards_dict = [h.model_dump() for h in hazards]
-            routes_dict = [r.model_dump() for r in routes]
+            hazards_dict = [h.model_dump(mode="json") for h in hazards]
+            routes_dict = [r.model_dump(mode="json") for r in routes]
             out = llm.pick_route_and_alert(
                 start=payload.start,
                 destination=payload.destination,

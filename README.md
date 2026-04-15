@@ -15,7 +15,13 @@ python -m pip install -r requirements.txt
 2) Run the API:
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+If you get a Windows error like `WinError 10048` (port already in use), pick another port:
+
+```bash
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 3) Open the UI:

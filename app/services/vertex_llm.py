@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,4 +105,5 @@ class VertexLLM:
 
             return parsed
         except Exception:
+            logging.getLogger(__name__).exception("Vertex LLM call failed; falling back to local evaluator")
             return None
